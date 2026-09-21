@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ShadeSide - which side of the ride to sit on</title>
+<style>
+  :root { --bg:#12161c; --panel:#1a212b; --line:#2c3844; --text:#eef2f6; --dim:#8e9aa8; --accent:#f2c94c; --good:#7ee0a3; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--text); font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:26px 14px 44px; }
+  h1 { font-size:30px; }
+  .sub { color:var(--dim); margin:6px 0 18px; font-size:14px; text-align:center; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px 18px; width:min(560px, 94vw); margin-bottom:14px; }
+  .card h2 { font-size:15px; margin-bottom:10px; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; }
+  select, input { background:#12171d; border:1px solid var(--line); border-radius:8px; color:var(--text); padding:9px 12px; font-size:14px; }
+  select { flex:1; min-width:120px; }
+  .compass { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+  .dir { background:#12171d; border:1px solid var(--line); border-radius:10px; padding:10px 0; text-align:center; cursor:pointer; font-size:15px; font-weight:700; color:var(--dim); }
+  .dir.on { background:var(--accent); color:#12161c; border-color:var(--accent); }
+  #verdict { text-align:center; padding:22px 16px; }
+  #verdict .big { font-size:34px; font-weight:900; letter-spacing:.5px; }
+  #verdict .why { color:var(--dim); margin-top:8px; font-size:14px; line-height:1.5; }
+  #verdict.night .big { color:var(--dim); font-size:22px; }
+  .good { color:var(--good); }
+  #diagram { display:flex; justify-content:center; margin-top:12px; }
+  .foot { margin-top:14px; color:var(--dim); font-size:13px; }
+  a { color:var(--accent); text-decoration:none; }
+</style>
+</head>
+<body>
+<h1>ShadeSide</h1>
+<div class="sub">pick your direction and time - get the side of the bus, car or plane the sun won't blind you on</div>
+
+<div class="card">
+  <h2>Where and when</h2>
+  <div class="row">
+    <select id="city">
+      <option value="tlv">Tel Aviv</option>
+      <option value="jlm">Jerusalem</option>
+      <option value="nyc">New York</option>
+      <option value="lon">London</option>
+      <option value="par">Paris</option>
+      <option value="lax">Los Angeles</option>
+      <option value="tyo">Tokyo</option>
+      <option value="syd">Sydney</option>
+      <option value="custom">Custom coordinates</option>
+    </select>
+    <input type="date" id="date">
+    <input type="time" id="time" value="08:30">
+  </div>
+  <div class="row" id="custom-row" style="margin-top:10px; display:none">
+    <input type="number" id="lat" step="0.01" placeholder="Lat" style="width:100px">
+    <input type="number" id="lon" step="0.01" placeholder="Lon" style="width:100px">
+    <select id="tz">
+      <option value="Asia/Jerusalem">Israel (GMT+2/+3)</option>
+      <option value="Europe/London">UK (GMT/+1)</option>
+      <option value="Europe/Paris">Central Europe</option>
+      <option value="America/New_York">US Eastern</option>
+      <option value="America/Los_Angeles">US Pacific</option>
+      <option value="Asia/Tokyo">Japan</option>
+      <option value="Australia/Sydney">Sydney</option>
+      <option value="UTC">UTC</option>
+    </select>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Which way are you heading?</h2>
+  <div class="compass" id="compass"></div>
+</div>
+
+<div class="card" id="verdict">
+  <div class="big" id="big">Pick a direction</div>
+  <div class="why" id="why"></div>
+  <div id="diagram"></div>
+</div>
+
+<div class="foot"><a href="index.html">&larr; about</a></div>
+
+<script src="engine.js?v=1"></script>
+<script>
+(function () {
+  var CITIES = {
+    tlv: { lat: 32.08, lon: 34.78, tz: 'Asia/Jerusalem' },
+    jlm: { lat: 31.77, lon: 35.21, tz: 'Asia/Jerusalem' },
+    nyc: { lat: 40.71, lon: -74.0, tz: 'America/New_York' },
+    lon: { lat: 51.5, lon: -0.12, tz: 'Europe/London' },
+    par: { lat: 48.85, lon: 2.35, tz: 'Europe/Paris' },
+    lax: { lat: 34.05, lon: -118.24, tz: 'America/Los_Angeles' },
+    tyo: { lat: 35.68, lon: 139.69, tz: 'Asia/Tokyo' },
+    syd: { lat: -33.87, lon: 151.21, tz: 'Australia/Sydney' }
+  };
+  var DIRS = [['N',0],['NE',45],['E',90],['SE',135],['S',180],['SW',225],['W',270],['NW',315]];
+
+  var bearing = null;
+
+  var dateEl = document.getElementById('date');
+  var now = new Date();
+  dateEl.value = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0');
+
+  var compassEl = document.getElementById('compass');
+  DIRS.forEach(function (d) {
+    var b = document.createElement('div');
+    b.className = 'dir';
+    b.textContent = d[0];
+    b.setAttribute('data-bearing', d[1]);
+    b.addEventListener('click', function () {
+      bearing = d[1];
+      compassEl.querySelectorAll('.dir').forEach(function (x) { x.classList.remove('on'); });
+      b.classList.add('on');
+      update();
+    });
+    compassEl.appendChild(b);
+  });
+
+  function loc() {
+    var c = document.getElementById('city').value;
+    if (c === 'custom') {
+      return {
+        lat: parseFloat(document.getElementById('lat').value),
+        lon: parseFloat(document.getElementById('lon').value),
+        tz: document.getElementById('tz').value
+      };
+    }
+    return CITIES[c];
+  }
+
+  document.getElementById('city').addEventListener('change', function () {
+    document.getElementById('custom-row').style.display = this.value === 'custom' ? 'flex' : 'none';
+    update();
+  });
+  ['date','time','lat','lon','tz'].forEach(function (id) {
+    document.getElementById(id).addEventListener('change', update);
+    document.getElementById(id).addEventListener('input', update);
+  });
+
+  function fmtAz(az) {
+    var names = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+    return names[Math.round(az / 22.5) % 16];
+  }
+
+  function update() {
+    if (bearing === null) return;
+    var L = loc();
+    if (isNaN(L.lat) || isNaN(L.lon)) return;
+    var timeParts = document.getElementById('time').value.split(':');
+    var dateParts = dateEl.value.split('-');
+    if (dateParts.length !== 3 || timeParts.length < 2) return;
+    // interpret entered date/time as LOCAL civil time in the location's timezone
+    var guessUTC = Date.UTC(+dateParts[0], +dateParts[1]-1, +dateParts[2], +timeParts[0], +timeParts[1]);
+    var off = ShadeSide.tzOffsetMinutes(L.tz, new Date(guessUTC));
+    var utc = new Date(guessUTC - off * 60000);
+    var sun = ShadeSide.solarPos(utc, L.lat, L.lon);
+    var verdict = document.getElementById('verdict');
+    var big = document.getElementById('big');
+    var why = document.getElementById('why');
+    var diagram = document.getElementById('diagram');
+
+    if (sun.elevation < -1) {
+      verdict.className = 'card night';
+      big.textContent = 'Night ride - sit anywhere';
+      why.textContent = 'The sun is below the horizon there at that time (elevation ' + sun.elevation.toFixed(1) + ' deg). No glare either way.';
+      diagram.innerHTML = '';
+      return;
+    }
+
+    var res = ShadeSide.sideOf(bearing, sun.azimuth);
+    var shade = res.side === 'left' ? 'RIGHT' : res.side === 'right' ? 'LEFT' : null;
+    verdict.className = 'card';
+    if (shade) {
+      big.innerHTML = 'Sit on the <span class="good">' + shade + '</span>';
+      why.innerHTML = 'Sun is on the ' + res.side + ' side (' + fmtAz(sun.azimuth) + ', ' + Math.round(sun.azimuth) + ' deg, ' + Math.round(sun.elevation) + ' deg up) - glare level: ' + ShadeSide.glare(sun.elevation) + '. The ' + shade.toLowerCase() + ' side rides in shade.';
+    } else if (res.side === 'ahead') {
+      big.textContent = 'Sun straight ahead - both sides equal';
+      why.innerHTML = 'The sun (' + fmtAz(sun.azimuth) + ', ' + Math.round(sun.elevation) + ' deg up) is almost dead ahead. Glare: ' + ShadeSide.glare(sun.elevation) + '. Pick a side away from the driver\'s window if you can.';
+    } else {
+      big.textContent = 'Sun behind you - both sides good';
+      why.innerHTML = 'The sun (' + fmtAz(sun.azimuth) + ', ' + Math.round(sun.elevation) + ' deg up) is nearly dead behind. No glare on either side.';
+    }
+
+    // diagram: travel direction up; sun marker at relative bearing
+    var rel = res.rel;
+    var rad = (rel - 90) * Math.PI / 180; // 0 rel = up
+    var cx = 90, cy = 90, r = 62;
+    var sx = cx + r * Math.cos(rad), sy = cy + r * Math.sin(rad);
+    var shadeArc = '';
+    if (shade === 'RIGHT') shadeArc = '<path d="M 90 90 L 90 28 A 62 62 0 0 1 90 152 Z" fill="rgba(126,224,163,.13)"/>';
+    if (shade === 'LEFT') shadeArc = '<path d="M 90 90 L 90 28 A 62 62 0 0 0 90 152 Z" fill="rgba(126,224,163,.13)"/>';
+    diagram.innerHTML =
+      '<svg width="180" height="180" viewBox="0 0 180 180">' +
+      '<circle cx="90" cy="90" r="62" fill="none" stroke="#2c3844" stroke-width="2"/>' +
+      shadeArc +
+      '<path d="M 90 118 L 84 96 L 90 101 L 96 96 Z M 90 118 L 90 62" stroke="#eef2f6" stroke-width="0" fill="#eef2f6"/>' +
+      '<path d="M 90 118 L 90 66" stroke="#eef2f6" stroke-width="3"/>' +
+      '<path d="M 90 58 L 84 72 L 96 72 Z" fill="#eef2f6"/>' +
+      '<circle cx="' + sx.toFixed(1) + '" cy="' + sy.toFixed(1) + '" r="11" fill="#f2c94c"/>' +
+      '<circle cx="' + sx.toFixed(1) + '" cy="' + sy.toFixed(1) + '" r="16" fill="none" stroke="#f2c94c" stroke-width="2" opacity=".5"/>' +
+      '<text x="90" y="20" text-anchor="middle" fill="#8e9aa8" font-size="11">ahead</text>' +
+      '</svg>';
+  }
+
+  // test hook
+  window.__shade = {
+    set: function (b) { bearing = b; compassEl.querySelectorAll('.dir').forEach(function (x) { x.classList.toggle('on', +x.getAttribute('data-bearing') === b); }); update(); },
+    verdict: function () { return { big: document.getElementById('big').textContent, why: document.getElementById('why').textContent }; }
+  };
+})();
+</script>
+</body>
+</html>
